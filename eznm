@@ -1,0 +1,109 @@
+#!/bin/env bash
+
+set -e
+
+NETWORK_MANAGER_PREFIX=${NETWORK_MANAGER_PREFIX:-"/etc/NetworkManager"}
+DEFAULT_NETWORK_ADAPTER=$DEFAULT_NETWORK_ADAPTER:-wlan0}
+
+# systemd specific sanity checks
+sanity_checks_sd() {
+    if ! [ "$(systemctl is-active NetworkManager)" = "active" ]; then
+        echo "Network Manager is not running. It may not even be installed. Check your installed packages."
+
+        exit 1
+    fi
+}
+
+# regular sanity checks
+sanity_checks() {
+    if ! [ -x "$(command -v nmcli)" ]; then
+        echo "The network manager CLI tool (nmcli) is not installed. This may mean network manager is installed"
+        echo "incorrect, or not at all."
+
+        exit 1
+    fi
+}
+
+cache_exists() {
+    if [ -f "/etc/NetworkManager/system-connections/$1.nmconnection" ]; then
+        echo "Network Manager seems to have already cached your connection (to $1). The rest of this script"
+        echo "may not have the effect you want (it *shouldn't* do any damage though)."
+
+        while :; do
+            read -p "Do you want to delete the Network Manager connection (y/n)? " delete_connection_confirmation
+            case "$delete_connection_confirmation" in
+                y|Y ) nmcli connection delete "$1" && break;;
+                n|N ) break;;
+                * ) echo "Your input was invalid; please supply a y(es) or n(o).";;
+            esac
+        done
+    fi
+}
+
+connect_to_network() {
+    if ! [ -x "$(command -v systemctl)" ]; then
+        echo "It looks like your system is not running systemd. If this is out of hatred, we don't know, but you"
+        echo "can still run this script without it. It will only bypass some sanity checks, and that's all."
+    else
+        sanity_checks_sd
+        sanity_checks
+    fi
+
+    read -p "Target network (use the 'list' subcommand to list available networks): " wanted_network
+    read -p "Is the network hidden (y/n)? " hidden_network
+    read -p "Does the network require password authentication (keys and such as not supported by this script, y/n)? " password_auth
+    read -p "Network adapter (leave blank if '$DEFAULT_NETWORK_ADAPTER'): " user_network_adapter
+
+    user_network_adapter=${user_network_adapter:-$DEFAULT_NETWORK_ADAPTER}
+
+    extra_flags=""
+
+    if [ "$password_auth" = "y" ] || [ "$password_auth" = "Y" ]; then
+        echo -n "Network password (will not echo): "
+        read -s password_network
+        echo
+
+        extra_flags+=" password $password_network"
+    fi
+
+    if [ "$hidden_network" = "y" ] || [ "$hidden_network" = "Y" ]; then
+        extra_flags+= " hidden yes"
+    fi
+
+    if ! [ "$DEFAULT_NETWORK_ADAPTER" = "$user_network_adapter" ]; then
+        DEFAULT_NETWORK_ADAPTER=$user_network_adapter
+
+        extra_flags+=" ifname $user_network_adapter"
+    fi
+
+    cache_exists $wanted_network
+
+    echo "Working..."
+
+    nmcli device wifi connect "$wanted_network" $extra_flags
+}
+
+list_networks() {
+    nmcli device wifi list
+}
+
+print_help() {
+    echo "Thin wrapper around 'nmcli' (Network Manager CLI tool)."
+    echo "Subcommands:"
+    echo "    help -- Print this help message"
+    echo "    connect, connect_network -- Connect to a network (stdin prompt)"
+    echo "    list, list_networks -- List the available networks"
+    echo "Globals (set these for more configuration options):"
+    echo "    NETWORK_MANAGER_PREFIX -- The prefix for Network Manager (default /etc/NetworkManager)"
+    echo "    DEFAULT_NETWORK_ADAPTER -- The network adapter to use (default wlan0)"
+    echo
+    echo "Author: Milo Banks, Copyright: 2022 (GNU GPL v3)"
+}
+
+case "$1" in
+    "connect" | "connect_network" ) connect_to_network;;
+    "list" | "list_networks" ) list_networks;;
+    "help" ) print_help;;
+    * ) print_help && exit 1;;
+esac
+
